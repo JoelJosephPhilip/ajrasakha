@@ -18,7 +18,7 @@ services:
     volumes:
       - ${GCP_CREDENTIALS_HOST_PATH:-/opt/reviewer/secrets/gcp-service-account.json}:/run/secrets/gcp-service-account.json:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:$$APP_PORT/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:$$APP_PORT${APP_ROUTE_PREFIX:-/api}/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -28,8 +28,8 @@ services:
 
   reviewer-frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         VITE_ENABLE_MOCKS: ${VITE_ENABLE_MOCKS:-false}
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}

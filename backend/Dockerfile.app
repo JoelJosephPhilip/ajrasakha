@@ -70,6 +70,6 @@ ENV APP_PORT=4000
 EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --quiet --tries=1 --spider "http://127.0.0.1:${APP_PORT:-4000}/health" || exit 1
+  CMD wget --quiet --tries=1 --spider "http://127.0.0.1:${APP_PORT:-4000}/api/health" || exit 1
 
 CMD ["sh", "/app/scripts/start.sh"]
