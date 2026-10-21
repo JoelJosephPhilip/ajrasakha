@@ -53,6 +53,32 @@ _FORMULATION_SUFFIX_RE = re.compile(
 _LEET_MAP = str.maketrans(
     {"@": "a", "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "$": "s"}
 )
+_CONFUSABLE_MAP = str.maketrans(
+    {
+        "А": "A",
+        "В": "B",
+        "Е": "E",
+        "К": "K",
+        "М": "M",
+        "Н": "H",
+        "О": "O",
+        "Р": "P",
+        "С": "C",
+        "Т": "T",
+        "Х": "X",
+        "а": "a",
+        "в": "b",
+        "е": "e",
+        "к": "k",
+        "м": "m",
+        "н": "h",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "т": "t",
+        "х": "x",
+    }
+)
 
 # These are language signals, not chemical names. They make a close spelling
 # less likely to be reported when it is being used as a place/name reference.
@@ -118,6 +144,7 @@ class _ScoredCandidate:
 
 
 def _normalize(value: str) -> str:
+    value = value.translate(_CONFUSABLE_MAP)
     value = unicodedata.normalize("NFKD", value)
     value = value.encode("ascii", "ignore").decode("ascii")
     value = value.lower().replace("’", "'")
@@ -525,7 +552,8 @@ def detect_chemicals(text: str) -> dict[str, str]:
             detail=f"Field 'text' must not exceed {_MAX_INPUT_CHARACTERS} characters.",
         )
     _ensure_loaded()
-    words = [_normalize(word) for word in _WORD_RE.findall(text)]
+    normalized_text = _normalize(text)
+    words = [_normalize(word) for word in _WORD_RE.findall(normalized_text)]
     if len(words) > _MAX_INPUT_WORDS:
         raise HTTPException(
             status_code=413,
@@ -601,7 +629,7 @@ def detect_chemicals(text: str) -> dict[str, str]:
                         _record_match(found, hit, scores, 1.0)
                     covered.update(range(start, end))
 
-    code_words = [_normalize(word) for word in _CODE_RE.findall(text)]
+    code_words = [_normalize(word) for word in _CODE_RE.findall(normalized_text)]
     for n in range(1, min(_MAX_CANDIDATE_WORDS, 3) + 1):
         for start in range(len(code_words) - n + 1):
             squashed = _squash(" ".join(code_words[start : start + n]))
@@ -619,7 +647,7 @@ def detect_chemicals(text: str) -> dict[str, str]:
         if value:
             _record_match(found, value, scores, 1.1)
 
-    for raw_token in _RAW_TOKEN_RE.findall(text):
+    for raw_token in _RAW_TOKEN_RE.findall(normalized_text):
         decoded = _leet_decode(raw_token)
         if not decoded or len(decoded) < _MIN_TOKEN_LEN:
             continue
