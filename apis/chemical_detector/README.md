@@ -28,7 +28,12 @@ Fuzzy matching is intentionally conservative for short or ambiguous words.
 Canonical chemical names receive stronger confidence than fuzzy aliases, and
 weak matches against common English aliases are rejected unless the surrounding
 text provides strong chemical-use context. The chemical database remains the
-authoritative source; no chemical names are hardcoded in the matching logic.
+authoritative source; the small biological and location vocabularies are
+context signals, not chemical records. An explicitly named biological product
+such as `Azophos` therefore cannot become a fuzzy `Triazophos` match merely
+because it appears beside a dosage, while an explicit `Triazophos` mention is
+still detected. A chemical-like name next to a place noun, such as
+`Endrin village`, is treated as a location reference.
 
 The detector is designed to balance recall and precision, but no fuzzy
 language matcher can guarantee perfect disambiguation for every ambiguous

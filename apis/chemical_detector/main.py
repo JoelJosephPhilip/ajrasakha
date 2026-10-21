@@ -84,6 +84,11 @@ _BIOLOGICAL_CONTEXT = {
     "ecological", "ecology", "biological", "bio", "companion", "trap",
     "flowering", "bund", "bunds", "tillage",
 }
+_BIOLOGICAL_NAMES = {
+    "azophos", "azospirillum", "bacillus", "beauveria", "bracon", "cotesia",
+    "metarhizium", "phosphobacteria", "rhizobium", "trichoderma",
+    "trichogramma",
+}
 _SCIENTIFIC_SUFFIXES = {
     "ae",
     "i",
@@ -341,6 +346,38 @@ def _has_strong_chemical_context(words: list[str], start: int, end: int) -> bool
     return bool(surrounding & _AGRICULTURAL_CONTEXT)
 
 
+def _has_biological_name(words: list[str]) -> bool:
+    return any(word in _BIOLOGICAL_NAMES for word in words)
+
+
+def _is_place_name_context(words: list[str], start: int, end: int) -> bool:
+    before = [_squash(word) for word in words[max(0, start - 3) : start]]
+    after = [_squash(word) for word in words[end : end + 3]]
+    location_nouns = _LOCATION_CONTEXT | {
+        "area", "block", "colony", "farm", "field", "mandal", "market",
+        "panchayat", "region", "station", "taluk",
+    }
+
+    if before and before[-1] in location_nouns:
+        return True
+    if after and after[0] in location_nouns:
+        return True
+    if len(before) >= 2 and before[-2:] in (
+        ["called", "the"],
+        ["named", "the"],
+        ["is", "called"],
+        ["is", "named"],
+    ):
+        return True
+    if before and before[-1] in {"called", "named"}:
+        return True
+    if len(after) >= 2 and after[:2] == ["is", "a"]:
+        return len(after) >= 3 and after[2] in location_nouns
+    if len(after) >= 2 and after[0] in {"a", "an", "the"}:
+        return after[1] in location_nouns
+    return False
+
+
 def _looks_like_scientific_name(term: str) -> bool:
     words = term.split()
     if len(words) != 2:
@@ -368,6 +405,11 @@ def _best_fuzzy_match(
     scientific_name = _looks_like_scientific_name(normalized)
     sentence_context, sentence_bonus = _sentence_context(words, start, end)
     scored: list[tuple[float, str, tuple[str, str], str]] = []
+
+    if _has_biological_name(normalized.split()):
+        return None
+    if _is_place_name_context(words, start, end):
+        return None
 
     for candidate in candidates:
         candidate_compact = _squash(candidate)
@@ -510,6 +552,8 @@ def detect_chemicals(text: str) -> dict[str, str]:
 
             exact = _CANDIDATES.get(term)
             if exact:
+                if _is_place_name_context(words, start, end):
+                    continue
                 if _is_common_alias(term) and (
                     _context_score(words, start, end) <= 0
                     or _biological_context_score(words, start, end) < 0
@@ -570,6 +614,8 @@ def detect_chemicals(text: str) -> dict[str, str]:
             value = _CANDIDATES_SQUASHED.get(squashed)
             if value:
                 code_term = " ".join(code_words[start : start + n])
+                if _is_place_name_context(code_words, start, start + n):
+                    continue
                 if _is_common_alias(code_term):
                     continue
                 _record_match(found, value, scores, 1.15)
