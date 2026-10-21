@@ -84,11 +84,6 @@ _BIOLOGICAL_CONTEXT = {
     "ecological", "ecology", "biological", "bio", "companion", "trap",
     "flowering", "bund", "bunds", "tillage",
 }
-_BIOLOGICAL_NAMES = {
-    "azophos", "azospirillum", "bacillus", "beauveria", "bracon", "cotesia",
-    "metarhizium", "phosphobacteria", "rhizobium", "trichoderma",
-    "trichogramma",
-}
 _SCIENTIFIC_SUFFIXES = {
     "ae",
     "i",
@@ -346,10 +341,6 @@ def _has_strong_chemical_context(words: list[str], start: int, end: int) -> bool
     return bool(surrounding & _AGRICULTURAL_CONTEXT)
 
 
-def _has_biological_name(words: list[str]) -> bool:
-    return any(word in _BIOLOGICAL_NAMES for word in words)
-
-
 def _is_place_name_context(words: list[str], start: int, end: int) -> bool:
     before = [_squash(word) for word in words[max(0, start - 3) : start]]
     after = [_squash(word) for word in words[end : end + 3]]
@@ -406,12 +397,15 @@ def _best_fuzzy_match(
     sentence_context, sentence_bonus = _sentence_context(words, start, end)
     scored: list[tuple[float, str, tuple[str, str], str]] = []
 
-    if _has_biological_name(normalized.split()):
-        return None
     if _is_place_name_context(words, start, end):
         return None
 
     for candidate in candidates:
+        # A fuzzy single-word chemical candidate must be compared with one
+        # input token. Otherwise surrounding dosage, connector, or advisory
+        # words can turn an unrelated phrase into a chemical typo.
+        if len(normalized.split()) > 1 and len(candidate.split()) == 1:
+            continue
         candidate_compact = _squash(candidate)
         distance = _edit_distance(compact, candidate_compact)
         # Base typo tolerance on the text supplied by the user. Using the
