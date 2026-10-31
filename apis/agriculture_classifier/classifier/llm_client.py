@@ -10,7 +10,7 @@ import time
 
 import httpx
 
-from . import config
+from . import config, disclaimers
 from .models import LLMUnavailableError
 
 log = logging.getLogger("agriculture_classifier.llm_client")
@@ -24,49 +24,6 @@ _CLASSIFY_SYSTEM_PROMPT = (
     "classify based on the question's meaning, not its exact spelling. "
     'Respond only with a JSON object of this exact shape: {"is_agriculture": true|false}.'
 )
-
-# Unicode script block -> the official languages that use it. Several
-# scripts are shared by multiple languages (Devanagari alone covers 8 of our
-# 23), so this narrows the LLM's choice to only the genuinely ambiguous
-# candidates instead of asking it to pick freely from all 23 - measured
-# directly against MiniMax-M2.7 (data/eval, not committed): a flat 23-way
-# prompt scored 19/23 and was inconsistent run-to-run on Bodo/Dogri/Konkani/
-# Sanskrit; narrowing to the script's actual candidates scored 23/23.
-_SCRIPT_RANGES: list[tuple[tuple[int, int], list[str]]] = [
-    ((0x0900, 0x097F), ["Hindi", "Marathi", "Nepali", "Sanskrit", "Maithili", "Bodo", "Konkani", "Dogri"]),  # Devanagari
-    ((0x0980, 0x09FF), ["Bengali", "Assamese"]),  # Bengali-Assamese
-    ((0x0A00, 0x0A7F), ["Punjabi"]),  # Gurmukhi
-    ((0x0A80, 0x0AFF), ["Gujarati"]),
-    ((0x0B00, 0x0B7F), ["Odia"]),
-    ((0x0B80, 0x0BFF), ["Tamil"]),
-    ((0x0C00, 0x0C7F), ["Telugu"]),
-    ((0x0C80, 0x0CFF), ["Kannada"]),
-    ((0x0D00, 0x0D7F), ["Malayalam"]),
-    ((0x0600, 0x06FF), ["Urdu", "Kashmiri", "Sindhi"]),  # Perso-Arabic
-    ((0x1C50, 0x1C7F), ["Santali"]),  # Ol Chiki
-    ((0xABC0, 0xABFF), ["Manipuri (Meitei)"]),  # Meitei Mayek
-]
-
-
-def _script_candidates(text: str) -> list[str]:
-    """Deterministic, LLM-free script detection - counts each character's
-    Unicode block and returns the official languages that use the
-    best-represented script. No script match (Latin/romanized/punctuation/
-    numbers) returns ["English"], matching this service's existing
-    convention for transliterated text."""
-    counts: dict[int, int] = {}
-    for ch in text:
-        cp = ord(ch)
-        for i, (lo_hi, _langs) in enumerate(_SCRIPT_RANGES):
-            lo, hi = lo_hi
-            if lo <= cp <= hi:
-                counts[i] = counts.get(i, 0) + 1
-                break
-    if not counts:
-        return ["English"]
-    best_index = max(counts, key=counts.get)
-    return _SCRIPT_RANGES[best_index][1]
-
 
 def _narrowed_language_prompt(candidates: list[str]) -> str:
     return (
@@ -91,12 +48,14 @@ def classify_agriculture(question: str) -> bool:
 
 
 def detect_language(question: str) -> str:
-    """Script detection first (deterministic, no LLM call) narrows to the
-    languages that actually use that script. A single-language script
-    (Tamil, Telugu, Gujarati, ...) returns directly - no ambiguity, no LLM
-    needed. Only a shared script (Devanagari, Perso-Arabic, Bengali-Assamese)
-    calls MiniMax, and only to disambiguate within that narrowed set."""
-    candidates = _script_candidates(question)
+    """Script detection first (deterministic, no LLM call), via
+    disclaimers.script_candidates - narrows to the known languages that
+    actually use that script (derived from the CSV itself, so a newly
+    added language works automatically). A single-language script (Tamil,
+    Telugu, Gujarati, ...) returns directly - no ambiguity, no LLM needed.
+    Only a shared script (Devanagari, Perso-Arabic, Bengali-Assamese) calls
+    MiniMax, and only to disambiguate within that narrowed set."""
+    candidates = disclaimers.script_candidates(question)
     if len(candidates) == 1:
         return candidates[0]
 
@@ -112,10 +71,11 @@ def detect_language(question: str) -> str:
         raise LLMUnavailableError(f"Could not parse language-detection response: {exc}") from exc
 
     if language not in candidates:
-        # The model answered outside the narrowed set it was given - fall
-        # back to the script's most common language rather than guessing.
-        log.warning("detect_language returned %r outside narrowed candidates %r", language, candidates)
-        return candidates[0]
+        # The model answered outside the narrowed set it was given - treat
+        # it the same as any other unrecognized language, rather than
+        # inventing a second fallback-ordering concept.
+        log.warning("detect_language returned %r outside narrowed candidates %r - defaulting to English", language, candidates)
+        return "English"
     return language
 
 
