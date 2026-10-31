@@ -9,10 +9,11 @@ load_dotenv()
 # worth the dual-mode client writing_assistant needs).
 MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/v1")
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
-# "MiniMax-M3" is the model string the public API actually serves - confirmed
-# against writing_assistant's own working deployment config. "MiniMax-M2.7"
-# is only ever the self-hosted model name, not a valid public-API value.
-MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M3")
+# MiniMax-M2.7 is a strict product requirement (confirmed live against the
+# public API - it is in fact a valid public model, contrary to an earlier,
+# wrong assumption here based only on writing_assistant's own config using
+# "MiniMax-M3" instead).
+MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
 MINIMAX_CHAT_PATH = os.getenv("MINIMAX_CHAT_PATH", "/text/chatcompletion_v2")
 MINIMAX_TIMEOUT_SECONDS = float(os.getenv("MINIMAX_TIMEOUT_SECONDS", "90"))
 MINIMAX_SEED = int(os.getenv("MINIMAX_SEED", "0"))

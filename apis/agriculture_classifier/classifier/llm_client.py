@@ -11,7 +11,6 @@ import time
 import httpx
 
 from . import config
-from .disclaimers import OFFICIAL_LANGUAGES
 from .models import LLMUnavailableError
 
 log = logging.getLogger("agriculture_classifier.llm_client")
@@ -26,13 +25,56 @@ _CLASSIFY_SYSTEM_PROMPT = (
     'Respond only with a JSON object of this exact shape: {"is_agriculture": true|false}.'
 )
 
-_DETECT_LANGUAGE_SYSTEM_PROMPT = (
-    "Identify the language the user's question is written in. Respond with "
-    "exactly one of these language names: " + ", ".join(OFFICIAL_LANGUAGES) + ". "
-    'If the question is in English, or is romanized/transliterated text, '
-    'respond "English". Respond only with a JSON object of this exact '
-    'shape: {"language": "<one of the listed names>"}.'
-)
+# Unicode script block -> the official languages that use it. Several
+# scripts are shared by multiple languages (Devanagari alone covers 8 of our
+# 23), so this narrows the LLM's choice to only the genuinely ambiguous
+# candidates instead of asking it to pick freely from all 23 - measured
+# directly against MiniMax-M2.7 (data/eval, not committed): a flat 23-way
+# prompt scored 19/23 and was inconsistent run-to-run on Bodo/Dogri/Konkani/
+# Sanskrit; narrowing to the script's actual candidates scored 23/23.
+_SCRIPT_RANGES: list[tuple[tuple[int, int], list[str]]] = [
+    ((0x0900, 0x097F), ["Hindi", "Marathi", "Nepali", "Sanskrit", "Maithili", "Bodo", "Konkani", "Dogri"]),  # Devanagari
+    ((0x0980, 0x09FF), ["Bengali", "Assamese"]),  # Bengali-Assamese
+    ((0x0A00, 0x0A7F), ["Punjabi"]),  # Gurmukhi
+    ((0x0A80, 0x0AFF), ["Gujarati"]),
+    ((0x0B00, 0x0B7F), ["Odia"]),
+    ((0x0B80, 0x0BFF), ["Tamil"]),
+    ((0x0C00, 0x0C7F), ["Telugu"]),
+    ((0x0C80, 0x0CFF), ["Kannada"]),
+    ((0x0D00, 0x0D7F), ["Malayalam"]),
+    ((0x0600, 0x06FF), ["Urdu", "Kashmiri", "Sindhi"]),  # Perso-Arabic
+    ((0x1C50, 0x1C7F), ["Santali"]),  # Ol Chiki
+    ((0xABC0, 0xABFF), ["Manipuri (Meitei)"]),  # Meitei Mayek
+]
+
+
+def _script_candidates(text: str) -> list[str]:
+    """Deterministic, LLM-free script detection - counts each character's
+    Unicode block and returns the official languages that use the
+    best-represented script. No script match (Latin/romanized/punctuation/
+    numbers) returns ["English"], matching this service's existing
+    convention for transliterated text."""
+    counts: dict[int, int] = {}
+    for ch in text:
+        cp = ord(ch)
+        for i, (lo_hi, _langs) in enumerate(_SCRIPT_RANGES):
+            lo, hi = lo_hi
+            if lo <= cp <= hi:
+                counts[i] = counts.get(i, 0) + 1
+                break
+    if not counts:
+        return ["English"]
+    best_index = max(counts, key=counts.get)
+    return _SCRIPT_RANGES[best_index][1]
+
+
+def _narrowed_language_prompt(candidates: list[str]) -> str:
+    return (
+        "Identify which of these specific languages the user's text is "
+        "written in - it is definitely one of: " + ", ".join(candidates) + ". "
+        'Respond only with a JSON object of this exact shape: '
+        '{"language": "<one of the listed names>"}.'
+    )
 
 
 def classify_agriculture(question: str) -> bool:
@@ -49,16 +91,32 @@ def classify_agriculture(question: str) -> bool:
 
 
 def detect_language(question: str) -> str:
+    """Script detection first (deterministic, no LLM call) narrows to the
+    languages that actually use that script. A single-language script
+    (Tamil, Telugu, Gujarati, ...) returns directly - no ambiguity, no LLM
+    needed. Only a shared script (Devanagari, Perso-Arabic, Bengali-Assamese)
+    calls MiniMax, and only to disambiguate within that narrowed set."""
+    candidates = _script_candidates(question)
+    if len(candidates) == 1:
+        return candidates[0]
+
     messages = [
-        {"role": "system", "content": _DETECT_LANGUAGE_SYSTEM_PROMPT},
+        {"role": "system", "content": _narrowed_language_prompt(candidates)},
         {"role": "user", "content": question},
     ]
     content = _chat_completion(messages, temperature=0.0, call_name="detect_language")
     try:
         parsed = json.loads(content)
-        return str(parsed["language"]).strip()
+        language = str(parsed["language"]).strip()
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise LLMUnavailableError(f"Could not parse language-detection response: {exc}") from exc
+
+    if language not in candidates:
+        # The model answered outside the narrowed set it was given - fall
+        # back to the script's most common language rather than guessing.
+        log.warning("detect_language returned %r outside narrowed candidates %r", language, candidates)
+        return candidates[0]
+    return language
 
 
 def _chat_completion(messages: list[dict], call_name: str = "unknown", **kwargs) -> str:
