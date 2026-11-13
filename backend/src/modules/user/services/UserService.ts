@@ -37,6 +37,8 @@ import { TrendGranularity } from '#root/shared/database/providers/mongo/reposito
 import { IRoleAssigneeService } from '#root/modules/question/interfaces/IRoleAssigneeService.js';
 import { IModeratorQueueService } from '#root/modules/question/interfaces/IModeratorQueueService.js';
 import { buildUserActivityPdfReport, UserSessionLog } from '#root/utils/buildUserActivityPdfReport.js';
+import { emailConfig } from '#root/config/mail.js';
+import { annamLogoInlineAttachment } from '#root/utils/emailAssets.js';
 
 
 @injectable()
@@ -270,6 +272,7 @@ export class UserService extends BaseService {
         'mobile',
         'university',
         'kvkCovered',
+        'sendDailyReport',
       ] as const;
 
       const sanitizedData: Partial<IUser> = {};
@@ -934,9 +937,12 @@ export class UserService extends BaseService {
           session,
         );
 
+        const question = await this.questionRepo.getById(questionId, session);
+
         await this.questionRepo.updateQuestion(
           questionId,
           {
+            previousStatus: question?.status,
             status: 'hold',
             isOnHold: true,
             holdAt: new Date(),
@@ -947,7 +953,6 @@ export class UserService extends BaseService {
 
         // Send notification to the expert that they have been removed from allocation
         try {
-          const question = await this.questionRepo.getById(questionId, session);
           const truncatedQuestionText = question?.question
             ? question.question.length > 50
               ? question.question.substring(0, 50) + '...'
@@ -1665,6 +1670,7 @@ export class UserService extends BaseService {
     });
 
     const sessions: UserSessionLog[] = [];
+    const activeIntervals: Array<{ start: number; end: number }> = [];
     let totalRevCycleMs = 0;
     const nowMs = Date.now();
     const startLimitMs = startDate.getTime();
@@ -1703,6 +1709,7 @@ export class UserService extends BaseService {
       const end = Math.min(toTime, endLimitMs);
 
       if (end > start) {
+        activeIntervals.push({ start, end });
         const sessionMs = end - start;
         totalRevCycleMs += sessionMs;
 
@@ -1732,6 +1739,7 @@ export class UserService extends BaseService {
       userId,
       startDate,
       endDate,
+      activeIntervals,
     );
 
     // Build PDF buffer
@@ -1754,48 +1762,251 @@ export class UserService extends BaseService {
       gatekeepedCount: metrics.gatekeepedCount,
       totalGatekeepingMs: metrics.totalGatekeepingMs,
       gdbPushedCount: metrics.gdbPushedCount,
+      reroutedCount: metrics.reroutedCount,
+      totalReroutingMs: metrics.totalReroutingMs,
+      expertReroutedCount: metrics.expertReroutedCount,
+      totalExpertReroutingMs: metrics.totalExpertReroutingMs,
+      heldCount: metrics.heldCount,
+      totalHoldingMs: metrics.totalHoldingMs,
       sessions,
     });
 
     // If sendToEmail flag is set, send the report via email
     if (query.sendToEmail) {
-      const emails = appConfig.individualReportEmails;
-      if (!emails) {
-        throw new BadRequestError('INDIVIDUAL_REPORT_EMAILS environment variable is not configured');
+      if (user.role === 'pae_expert') {
+        throw new BadRequestError('Sending activity reports to PAE users is not allowed');
       }
 
-      const emailList = emails.split(',').map((e) => e.trim()).filter(Boolean);
-      if (emailList.length === 0) {
-        throw new BadRequestError('No valid emails configured in INDIVIDUAL_REPORT_EMAILS');
+      // Primary recipient is the concern person whose report is being viewed/generated
+      const recipient = user.email?.trim();
+      const fallbackEmails = (appConfig.individualReportEmails || '')
+        .split(',')
+        .map((e) => e.trim())
+        .filter(Boolean);
+
+      const targetTo = recipient || fallbackEmails[0];
+      if (!targetTo) {
+        throw new BadRequestError(
+          `User ${userName} does not have a configured email address, and no fallback email was found`,
+        );
       }
+
+      // CC list: multiple CC recipients configured via ACTIVITY_REPORT_CC / INDIVIDUAL_REPORT_CC / individualReportEmails
+      const ccConfig = emailConfig.ACTIVITY_REPORT_CC || appConfig.activityReportCc || '';
+      const ccList = ccConfig
+        .split(',')
+        .map((e) => e.trim())
+        .filter(Boolean)
+        .filter((e) => e.toLowerCase() !== targetTo.toLowerCase());
 
       const cleanName = userName.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const startStr = query.startDate ? query.startDate.replace(/[^a-zA-Z0-9]/g, '_') : 'start';
-      const endStr = query.endDate ? query.endDate.replace(/[^a-zA-Z0-9]/g, '_') : 'end';
-      const filename = `${cleanName}_Activity_Report_${startStr}_to_${endStr}.pdf`;
+      const startTag = startDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const endTag = endDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const filename = `${cleanName}_Activity_Report_${startTag}_to_${endTag}.pdf`;
+
+      const formatDateIST = (d: Date) =>
+        d.toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+        });
+
+      const dateLabel =
+        startTag === endTag
+          ? formatDateIST(startDate)
+          : `${formatDateIST(startDate)} to ${formatDateIST(endDate)}`;
 
       const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #16a34a;">Activity Report Generated</h2>
-          <p>Hello,</p>
-          <p>Please find attached the user activity report for <strong>${userName}</strong>.</p>
-          <p>This report was generated on ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} (IST).</p>
-          <p>Best regards,<br/>Review System Team</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #171717;">
+          <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 18px 24px; margin-bottom: 20px;">
+            <h2 style="color: #166534; margin: 0 0 8px 0; font-size: 18px;">AjraSakha Review System - Activity Report</h2>
+            <p style="margin: 0; color: #15803d; font-size: 14px;"><strong>Performance & Activity Summary (${dateLabel})</strong></p>
+          </div>
+          <p>Hello <strong>${userName}</strong>,</p>
+          <p>Please find attached your individual activity report for <strong>${dateLabel}</strong>.</p>
+          <p>This report includes your total hours in review cycles, check-in / check-out session logs, and performance metrics across authoring, reviewing, moderation, auditing, and gatekeeping.</p>
+          <p style="font-size: 12px; color: #6b7280; margin-top: 24px;">Generated on ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} (IST).</p>
+          <div style="margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 12px; font-size: 13px; color: #374151;">
+            <p style="margin: 0;">Regards,</p>
+            <p style="margin: 4px 0 0 0; font-weight: bold; color: #166534;">AjraSakha Review Operations Team</p>
+          </div>
         </div>
       `;
 
       await sendEmailWithAttachment(
-        emailList,
-        `User Activity Report - ${userName}`,
+        targetTo,
+        `User Activity Report - ${userName} (${dateLabel})`,
         html,
         pdfBuffer,
         filename,
         'application/pdf',
+        [annamLogoInlineAttachment()],
+        ccList.length ? ccList : undefined,
       );
 
-      return { success: true, message: 'Report email sent successfully' };
+      return {
+        success: true,
+        message: `Report email sent to ${targetTo}${ccList.length ? ` (CC: ${ccList.join(', ')})` : ''}`,
+      };
     }
 
     return pdfBuffer;
+  }
+
+  /**
+   * Daily shift-based batch job:
+   * 
+   * MORNING SHIFT (2:55 PM IST):
+   *   - Sends report to users who checked in (sendDailyReport === true)
+   *   - Report covers: TODAY 6:00 AM to 2:55 PM IST
+   * 
+   * EVENING SHIFT (12:00 AM IST):
+   *   - Sends report to users who checked in (sendDailyReport === true)
+   *   - Report covers: YESTERDAY 3:00 PM to 11:59 PM IST
+   * 
+   * Primary 'To' is the user's email (the concern person), and 'CC' contains configured CC recipients.
+   */
+  async sendDailyUserActivityReports(targetDateStr?: string): Promise<{
+    date: string;
+    total: number;
+    sent: number;
+    skipped: number;
+    failed: number;
+    errors: { userId: string; name?: string; email?: string; error: string }[];
+  }> {
+    // 1. Calculate target date and time range based on current IST hour
+    const now = new Date();
+    // IST is UTC+5.5 hours
+    const istNow = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+    const istHour = istNow.getUTCHours();
+
+    let dateStr: string;
+    let startDateStr: string;
+    let endDateStr: string;
+    let shiftType: 'morning' | 'evening';
+
+    // Helper to format date as YYYY-MM-DD
+    const formatDateIST = (d: Date): string => {
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    };
+
+    // Helper to pad number with leading zero
+    const pad = (n: number): string => String(n).padStart(2, '0');
+
+    // Determine if this is morning shift (2:55 PM) or evening shift (12:00 AM)
+    // Morning shift cron runs at 14:55 UTC = 2:55 PM IST
+    // Evening shift cron runs at 18:30 UTC = 12:00 AM IST
+    // istHour 14-15 = around 2:55 PM IST (morning shift report)
+    // istHour 18-19 = around 12:00 AM IST (evening shift report)
+    const isMorningShift = istHour >= 14 && istHour < 16;
+
+    if (isMorningShift) {
+      // ┌─────────────────────────────────────────────────────────────┐
+      // │  MORNING SHIFT REPORT (runs at 2:55 PM IST)                  │
+      // │  Covers: TODAY 6:00 AM → current time (or 3:00 PM)          │
+      // └─────────────────────────────────────────────────────────────┘
+      shiftType = 'morning';
+      const todayStr = formatDateIST(istNow);
+      
+      // Use current time for end date
+      const currentHours = pad(istNow.getUTCHours());
+      const currentMinutes = pad(istNow.getUTCMinutes());
+      const currentSeconds = pad(istNow.getUTCSeconds());
+      const currentMs = String(istNow.getUTCMilliseconds()).padStart(3, '0');
+      
+      dateStr = todayStr;
+      startDateStr = `${todayStr}T06:00:00.000+05:30`;
+      endDateStr = `${todayStr}T${currentHours}:${currentMinutes}:${currentSeconds}.${currentMs}+05:30`;
+    } else {
+      // ┌─────────────────────────────────────────────────────────────┐
+      // │  EVENING SHIFT REPORT (runs at 12:00 AM IST)                 │
+      // │  Covers: YESTERDAY 3:00 PM → 11:59 PM IST                   │
+      // └─────────────────────────────────────────────────────────────┘
+      shiftType = 'evening';
+      const yesterday = new Date(istNow);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayStr = formatDateIST(yesterday);
+      
+      dateStr = yesterdayStr;
+      startDateStr = `${yesterdayStr}T15:00:00.000+05:30`;
+      endDateStr = `${yesterdayStr}T23:59:59.999+05:30`;
+    }
+
+    console.log(
+      `[sendDailyUserActivityReports] Generating ${shiftType} shift reports for date: ${dateStr} [${startDateStr} to ${endDateStr}]`,
+    );
+
+    // 2. Fetch all active review staff (excluding deactivated accounts and PAE users)
+    const staff = await this.userRepo.getActiveReviewStaff([
+      'expert',
+      'moderator',
+      'gate_keeper',
+      'auditor',
+    ]);
+
+    console.log(`[sendDailyUserActivityReports] Found ${staff.length} active review staff to process.`);
+
+    let sent = 0;
+    let skipped = 0;
+    let failed = 0;
+    const errors: { userId: string; name?: string; email?: string; error: string }[] = [];
+
+    for (const user of staff) {
+      const userId = user._id ? user._id.toString() : '';
+      if (!userId) continue;
+
+      const userName =
+        `${user.firstName || ''} ${user.lastName || ''}`.trim() ||
+        (user as any).userName ||
+        user.email ||
+        'User';
+
+      if (user.sendDailyReport !== true) {
+        console.log(
+          `[sendDailyUserActivityReports] Skipping user ${userName} (${userId}): sendDailyReport is false or not set.`,
+        );
+        skipped++;
+        continue;
+      }
+
+      if (!user.email || !user.email.includes('@')) {
+        console.warn(
+          `[sendDailyUserActivityReports] Skipping user ${userName} (${userId}): No valid email address.`,
+        );
+        skipped++;
+        continue;
+      }
+
+      try {
+        await this.exportUserActivityReport(userId, {
+          startDate: startDateStr,
+          endDate: endDateStr,
+          sendToEmail: true,
+        });
+        sent++;
+        console.log(`[sendDailyUserActivityReports] Successfully sent report to ${userName} (${user.email})`);
+      } catch (err: any) {
+        failed++;
+        const errorMsg = err?.message || String(err);
+        console.error(
+          `[sendDailyUserActivityReports] Failed to send report to ${userName} (${user.email}):`,
+          errorMsg,
+        );
+        errors.push({ userId, name: userName, email: user.email, error: errorMsg });
+      }
+    }
+
+    return {
+      date: dateStr,
+      total: staff.length,
+      sent,
+      skipped,
+      failed,
+      errors,
+    };
   }
 }

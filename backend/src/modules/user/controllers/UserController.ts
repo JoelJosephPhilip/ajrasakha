@@ -247,6 +247,7 @@ export class UserController {
           preference: targetUser.preference,
           kvkCovered: targetUser.kvkCovered,
           avatar: targetUser.avatar,
+          sendDailyReport: targetUser.sendDailyReport,
         },
       },
       outcome: {
@@ -272,6 +273,7 @@ export class UserController {
             preference: updatedUser.preference,
             kvkCovered: updatedUser.kvkCovered,
             avatar: updatedUser.avatar,
+            sendDailyReport: updatedUser.sendDailyReport,
           },
         },
       };
@@ -1606,5 +1608,18 @@ export class UserController {
       `attachment; filename="user-activity-report-${userId}.pdf"`,
     );
     return result;
+  }
+
+  @Post('/reports/send-daily-activity-reports')
+  @HttpCode(200)
+  @Authorized()
+  @OpenAPI({
+    summary: 'Trigger sending daily user activity reports for yesterday to all review staff',
+  })
+  async triggerDailyActivityReports(
+    @CurrentUser() currentUser: IUser,
+    @QueryParams() query: { targetDate?: string },
+  ) {
+    return await this.userService.sendDailyUserActivityReports(query.targetDate);
   }
 }

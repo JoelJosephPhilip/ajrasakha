@@ -333,6 +333,23 @@ export class UserRepository implements IUserRepository {
     return uniqueUsers;
   }
 
+  async getActiveReviewStaff(
+    roles: string[] = ['expert', 'moderator', 'gate_keeper', 'auditor'],
+    session?: ClientSession,
+  ): Promise<IUser[]> {
+    await this.init();
+    return this.usersCollection
+      .find(
+        {
+          role: { $in: roles as any },
+          status: { $ne: 'in-active' },
+          sendDailyReport: true,
+        },
+        { session },
+      )
+      .toArray();
+  }
+
   async findAllUsers(
     page: number,
     limit: number,
@@ -1271,12 +1288,20 @@ export class UserRepository implements IUserRepository {
     const result = await this.usersCollection.updateOne(
       {
         _id: new ObjectId(moderatorId),
-        // Auditor either-or guard (mirrors findAvailableUsersByRole): an auditor's one
-        // time-bound slot must be free — no feedback AND no time-bound assigned
-        // question. A manual-source assigned question is fine. Non-auditors are
-        // unconstrained.
+        // Role allocation guards:
+        // - Gate keepers must be completely free (assignedQuestionIds empty).
+        // - Auditors: one time-bound item (no feedback AND no time-bound question).
+        // - Moderators: unconstrained here.
         $or: [
-          { role: { $ne: 'auditor' } },
+          { role: { $nin: ['auditor', 'gate_keeper'] } },
+          {
+            role: 'gate_keeper',
+            $or: [
+              { assignedQuestionIds: { $exists: false } },
+              { assignedQuestionIds: null },
+              { assignedQuestionIds: { $size: 0 } },
+            ],
+          },
           {
             role: 'auditor',
             $and: [
@@ -1896,9 +1921,11 @@ export class UserRepository implements IUserRepository {
     try {
       const updatedAt = new Date();
       const isBlocked = action === 'block';
+      // Set sendDailyReport: true on unblock (check-in), false on block (check-out)
+      const sendDailyReport = action === 'unblock';
       const result = await this.usersCollection.findOneAndUpdate(
         {_id: new ObjectId(userId)},
-        {$set: {isBlocked}},
+        {$set: {isBlocked, sendDailyReport}},
         {upsert: true, returnDocument: 'after', session},
       );
       await Promise.all([

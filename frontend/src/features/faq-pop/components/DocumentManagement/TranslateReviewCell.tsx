@@ -18,6 +18,7 @@ import {
 } from "../../api";
 import { subscribeDashboardEvents } from "../../dashboardEvents";
 import { useAuthStore } from "@/stores/auth-store";
+import { useTranslateSettings } from "@/stores/translate-settings-store";
 import FileActionIcons from "./FileActionIcons";
 import StatusBadge from "./StatusBadge";
 
@@ -66,9 +67,15 @@ export default function TranslateReviewCell({
   canTranslate = false,
   onChanged,
   onTranslationStarted,
+  // The doc's own most recent failed/cancelled job (looked up by the caller from an always-on
+  // doc-id-keyed map — see DocumentManagementPanel's terminalJobsByDocId), if any. Seeds this
+  // button's mode dropdown so it doesn't silently diverge from the Translation Queue panel's own
+  // "Translate again" dropdown for the same document (both resume the same job either way).
+  lastTerminalJob,
 }) {
   const cfg = KIND_CONFIG[kind];
   const [busy, setBusy] = useState(false);
+  const { mode: translateMode, pipeline: translatePipeline, model: translateModel } = useTranslateSettings();
   const fileInputRef = useRef(null);
   // /api/pop has no auth, so the backend just stores whatever name it's sent, unverified
   // (docs/first_render_frontend.md, "Who translated / reviewed, and when") — per the user's
@@ -112,8 +119,8 @@ export default function TranslateReviewCell({
   async function handleTranslate() {
     setBusy(true);
     try {
-      if (scope === "placement") await translateDashboardDocument(doc.id, currentUserName);
-      else await translateUniqueDocument(doc.id, currentUserName);
+      if (scope === "placement") await translateDashboardDocument(doc.id, currentUserName, translateMode, translatePipeline, translateModel || undefined);
+      else await translateUniqueDocument(doc.id, currentUserName, translateMode, translatePipeline, translateModel || undefined);
       toast.success("Translation queued");
       onChanged?.({ ...doc, [cfg.statusKey]: "in_progress" });
       // Translations also show up in the separate Translation Queue panel (backed by
@@ -326,7 +333,7 @@ export default function TranslateReviewCell({
                 : undefined
           }
         >
-          Translate
+          Translate ({translateMode}, pipeline {translatePipeline})
         </button>
         {translationUploadControl}
       </div>

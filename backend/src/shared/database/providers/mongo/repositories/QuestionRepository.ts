@@ -801,6 +801,7 @@ export class QuestionRepository implements IQuestionRepository {
         unallocatedQuestions,
         pae_review,
         is_non_agri,
+        is_dynamic,
         is_testing,
         isTrainingQuestion,
         moderatorId,
@@ -955,7 +956,56 @@ export class QuestionRepository implements IQuestionRepository {
 
       // --- Filters ---
 
-      caseInsensitiveStringFilter('status', status);
+      const isDynamicTab =
+        is_dynamic === 'true' ||
+        is_dynamic === true ||
+        (status && status.toLowerCase() === 'dynamic');
+
+      if (isDynamicTab) {
+        const isHoldFilter =
+          isOnHold === 'true' ||
+          (isOnHold as any) === true ||
+          (status && status.toLowerCase() === 'hold');
+        const isPassFilter =
+          hiddenQuestions === 'true' ||
+          (hiddenQuestions as any) === true ||
+          (status && status.toLowerCase() === 'pass');
+
+        if (isHoldFilter) {
+          filter.isOnHold = { $eq: true };
+          delete filter.status;
+          if (!filter.$and) filter.$and = [];
+          filter.$and.push({
+            $or: [
+              { tag: { $in: ['dynamic', 'static_dynamic'] } },
+              { previousStatus: 'dynamic' },
+            ],
+          });
+        } else if (isPassFilter) {
+          filter.isHidden = { $eq: true };
+          filter.status = 'pass';
+          if (!filter.$and) filter.$and = [];
+          filter.$and.push({
+            tag: { $in: ['dynamic', 'static_dynamic'] },
+          });
+        } else if (status && status.toLowerCase() !== 'all' && status.toLowerCase() !== 'dynamic') {
+          caseInsensitiveStringFilter('status', status);
+          if (!filter.$and) filter.$and = [];
+          filter.$and.push({
+            tag: { $in: ['dynamic', 'static_dynamic'] },
+          });
+        } else {
+          filter.status = 'dynamic';
+        }
+      } else {
+        // --- Status filter with special handling for static_dynamic ---
+        // When status is 'static_dynamic', filter by tag field instead of status field
+        if (status && status.toLowerCase() === 'static_dynamic') {
+          filter.tag = { $regex: '^static_dynamic$', $options: 'i' };
+        } else {
+          caseInsensitiveStringFilter('status', status);
+        }
+      }
       caseInsensitiveStringFilter('source', source);
       caseInsensitiveStringFilter('priority', priority);
 
@@ -965,7 +1015,7 @@ export class QuestionRepository implements IQuestionRepository {
       // Dynamic tab sends status=dynamic via caseInsensitiveStringFilter above.
       if (is_non_agri === 'true' || is_non_agri === true) {
         filter.status = 'non_agri';
-      } else if (filter.status === undefined) {
+      } else if (!isDynamicTab && filter.status === undefined) {
         filter.status = { $nin: ['non_agri'] };
       }
 
@@ -7264,14 +7314,53 @@ export class QuestionRepository implements IQuestionRepository {
       // filter.status = {$nin: ['non_agri', 'dynamic']};
     }
 
-    // Apply isOnHold filter exactly matching findDetailedQuestions logic
-    if (query.isOnHold === 'true') {
-      filter.isOnHold = { $eq: true };
-    }
+    const isDynamicTab =
+      query.is_dynamic === 'true' ||
+      query.is_dynamic === true ||
+      (query.status && query.status.toLowerCase() === 'dynamic');
 
-    // Apply isHidden filter exactly matching findDetailedQuestions logic
-    if (query.hiddenQuestions === 'true' || query.status === 'pass') {
-      filter.isHidden = { $eq: true };
+    if (isDynamicTab) {
+      const isHoldFilter =
+        query.isOnHold === 'true' ||
+        (query.isOnHold as any) === true ||
+        (query.status && query.status.toLowerCase() === 'hold');
+      const isPassFilter =
+        query.hiddenQuestions === 'true' ||
+        (query.hiddenQuestions as any) === true ||
+        (query.status && query.status.toLowerCase() === 'pass');
+
+      if (isHoldFilter) {
+        filter.isOnHold = { $eq: true };
+        delete filter.status;
+        if (!filter.$and) filter.$and = [];
+        filter.$and.push({
+          $or: [
+            { tag: { $in: ['dynamic', 'static_dynamic'] } },
+            { previousStatus: 'dynamic' },
+          ],
+        });
+      } else if (isPassFilter) {
+        filter.isHidden = { $eq: true };
+        filter.status = 'pass';
+        if (!filter.$and) filter.$and = [];
+        filter.$and.push({
+          tag: { $in: ['dynamic', 'static_dynamic'] },
+        });
+      } else if (query.status && query.status.toLowerCase() !== 'all' && query.status.toLowerCase() !== 'dynamic') {
+        filter.tag = { $in: ['dynamic', 'static_dynamic'] };
+      } else {
+        filter.status = 'dynamic';
+      }
+    } else {
+      // Apply isOnHold filter exactly matching findDetailedQuestions logic
+      if (query.isOnHold === 'true') {
+        filter.isOnHold = { $eq: true };
+      }
+
+      // Apply isHidden filter exactly matching findDetailedQuestions logic
+      if (query.hiddenQuestions === 'true' || query.status === 'pass') {
+        filter.isHidden = { $eq: true };
+      }
     }
 
     // Apply states/normalisedCrops from body if provided (matching findDetailedQuestions logic)
@@ -7306,14 +7395,24 @@ export class QuestionRepository implements IQuestionRepository {
         ],
         { session },
       ).toArray(),
-      this.QuestionCollection.aggregate(
-        [
-          { $match: filter },
-          { $group: { _id: '$source', count: { $sum: 1 } } },
-          { $project: { _id: 0, source: '$_id', count: 1 } },
-        ],
-        { session },
-      ).toArray(),
+      // For static_dynamic status, group by tag instead of status
+      query.status && query.status.toLowerCase() === 'static_dynamic'
+        ? this.QuestionCollection.aggregate(
+            [
+              { $match: filter },
+              { $group: { _id: '$tag', count: { $sum: 1 } } },
+              { $project: { _id: 0, status: '$_id', count: 1 } },
+            ],
+            { session },
+          ).toArray()
+        : this.QuestionCollection.aggregate(
+            [
+              { $match: filter },
+              { $group: { _id: '$source', count: { $sum: 1 } } },
+              { $project: { _id: 0, source: '$_id', count: 1 } },
+            ],
+            { session },
+          ).toArray(),
     ]);
 
     const statuses = statusResults.map(r => ({
@@ -10342,15 +10441,114 @@ export class QuestionRepository implements IQuestionRepository {
     userId: string,
     startDate: Date,
     endDate: Date,
+    activeSessions?: Array<{ start: number; end: number }>,
   ): Promise<IUserActivityMetrics> {
     await this.init();
     const userObjectId = new ObjectId(userId);
-    const MAX_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+
+    interface TimeInterval {
+      start: number;
+      end: number;
+    }
+
+    const getActiveOverlapIntervals = (
+      startAt: Date | null | undefined,
+      endAt: Date | null | undefined,
+    ): TimeInterval[] => {
+      if (!startAt || !endAt) return [];
+      const taskStart = startAt.getTime();
+      const taskEnd = endAt.getTime();
+      if (taskEnd <= taskStart) return [];
+
+      const intervals: TimeInterval[] = [];
+
+      if (activeSessions && activeSessions.length > 0) {
+        // Intersect task duration with user's active check-in sessions
+        // Excludes overnight, off-shift, and idle pre-shift hours
+        for (const s of activeSessions) {
+          const overlapStart = Math.max(taskStart, s.start);
+          const overlapEnd = Math.min(taskEnd, s.end);
+          if (overlapEnd > overlapStart) {
+            intervals.push({ start: overlapStart, end: overlapEnd });
+          }
+        }
+      } else {
+        // If no active session data is present, clamp to the report query window [startDate, endDate]
+        const overlapStart = Math.max(taskStart, startDate.getTime());
+        const overlapEnd = Math.min(taskEnd, endDate.getTime());
+        if (overlapEnd > overlapStart) {
+          intervals.push({ start: overlapStart, end: overlapEnd });
+        }
+      }
+
+      return intervals;
+    };
+
+    const mergeIntervals = (intervals: TimeInterval[]): TimeInterval[] => {
+      if (intervals.length === 0) return [];
+      if (intervals.length === 1) return [{ ...intervals[0] }];
+
+      const sorted = [...intervals].sort((a, b) => a.start - b.start);
+      const merged: TimeInterval[] = [{ ...sorted[0] }];
+
+      for (let i = 1; i < sorted.length; i++) {
+        const prev = merged[merged.length - 1];
+        const curr = sorted[i];
+
+        if (curr.start <= prev.end) {
+          prev.end = Math.max(prev.end, curr.end);
+        } else {
+          merged.push({ ...curr });
+        }
+      }
+
+      return merged;
+    };
+
+    const subtractIntervals = (
+      base: TimeInterval[],
+      toRemove: TimeInterval[],
+    ): TimeInterval[] => {
+      if (base.length === 0) return [];
+      if (toRemove.length === 0) return mergeIntervals(base);
+
+      const mergedBase = mergeIntervals(base);
+      const mergedRemove = mergeIntervals(toRemove);
+
+      let currentPieces = [...mergedBase];
+
+      for (const r of mergedRemove) {
+        const nextPieces: TimeInterval[] = [];
+        for (const piece of currentPieces) {
+          if (r.end <= piece.start || r.start >= piece.end) {
+            nextPieces.push(piece);
+          } else {
+            if (r.start > piece.start) {
+              nextPieces.push({ start: piece.start, end: Math.min(piece.end, r.start) });
+            }
+            if (r.end < piece.end) {
+              nextPieces.push({ start: Math.max(piece.start, r.end), end: piece.end });
+            }
+          }
+        }
+        currentPieces = nextPieces;
+      }
+
+      return currentPieces;
+    };
+
+    const sumIntervals = (intervals: TimeInterval[]): number => {
+      return intervals.reduce((total, interval) => total + (interval.end - interval.start), 0);
+    };
+
+    const mergeAndSumIntervals = (intervals: TimeInterval[]): number => {
+      return sumIntervals(mergeIntervals(intervals));
+    };
 
     let authoredCount = 0;
-    let totalAuthoringMs = 0;
+    const authoringIntervals: TimeInterval[] = [];
     let reviewedCount = 0;
-    let totalReviewingMs = 0;
+    const reviewingIntervals: TimeInterval[] = [];
     const revCounts: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let gdbPushedCount = 0;
 
@@ -10387,10 +10585,7 @@ export class QuestionRepository implements IQuestionRepository {
           const allocStart = question?.firstAllocationAt
             ? new Date(question.firstAllocationAt)
             : authorCompletedAt;
-          const diff = authorCompletedAt.getTime() - allocStart.getTime();
-          if (diff > 0 && diff < MAX_DURATION_MS) {
-            totalAuthoringMs += diff;
-          }
+          authoringIntervals.push(...getActiveOverlapIntervals(allocStart, authorCompletedAt));
 
           if (
             question &&
@@ -10457,10 +10652,7 @@ export class QuestionRepository implements IQuestionRepository {
               }
 
               const assignedAt = new Date(h.createdAt);
-              const diff = reviewCompletedAt.getTime() - assignedAt.getTime();
-              if (diff > 0 && diff < MAX_DURATION_MS) {
-                totalReviewingMs += diff;
-              }
+              reviewingIntervals.push(...getActiveOverlapIntervals(assignedAt, reviewCompletedAt));
             }
           }
         }
@@ -10469,7 +10661,7 @@ export class QuestionRepository implements IQuestionRepository {
 
     // 3. Moderating: questions completed in date range
     let moderatedCount = 0;
-    let totalModeratingMs = 0;
+    const moderatingIntervals: TimeInterval[] = [];
 
     const moderatedQuestions = await this.QuestionCollection.find({
       moderatorId: userObjectId,
@@ -10495,16 +10687,13 @@ export class QuestionRepository implements IQuestionRepository {
       if (endAt && endAt >= startDate && endAt <= endDate) {
         moderatedCount++;
         const startAt = new Date(q.moderatorAssignedAt!);
-        const diff = endAt.getTime() - startAt.getTime();
-        if (diff > 0 && diff < MAX_DURATION_MS) {
-          totalModeratingMs += diff;
-        }
+        moderatingIntervals.push(...getActiveOverlapIntervals(startAt, endAt));
       }
     }
 
     // 4. Auditing: questions finished in date range
     let auditedCount = 0;
-    let totalAuditingMs = 0;
+    const auditingIntervals: TimeInterval[] = [];
 
     const auditedQuestions = await this.QuestionCollection.find({
       auditorId: userObjectId,
@@ -10518,16 +10707,13 @@ export class QuestionRepository implements IQuestionRepository {
         ? new Date((q as any).auditorAssignedAt)
         : null;
       if (startAt) {
-        const diff = endAt.getTime() - startAt.getTime();
-        if (diff > 0 && diff < MAX_DURATION_MS) {
-          totalAuditingMs += diff;
-        }
+        auditingIntervals.push(...getActiveOverlapIntervals(startAt, endAt));
       }
     }
 
     // 5. Gatekeeping: questions finished in date range
     let gatekeepedCount = 0;
-    let totalGatekeepingMs = 0;
+    const gatekeepingIntervals: TimeInterval[] = [];
 
     const gatekeepedQuestions = await this.QuestionCollection.find({
       gateKeeperId: userObjectId,
@@ -10541,12 +10727,148 @@ export class QuestionRepository implements IQuestionRepository {
         ? new Date((q as any).gateKeeperAssignedAt)
         : null;
       if (startAt) {
-        const diff = endAt.getTime() - startAt.getTime();
-        if (diff > 0 && diff < MAX_DURATION_MS) {
-          totalGatekeepingMs += diff;
+        gatekeepingIntervals.push(...getActiveOverlapIntervals(startAt, endAt));
+      }
+    }
+
+    // 6. Rerouting: reroute entries where the moderator (reroutedBy) performed the reroute in date range
+    let reroutedCount = 0;
+    const reroutingIntervals: TimeInterval[] = [];
+
+    const rerouteDocs = await this.ReRouteCollection.find({
+      reroutes: {
+        $elemMatch: {
+          reroutedBy: userObjectId,
+          reroutedAt: { $gte: startDate, $lte: endDate },
+        },
+      },
+    }).toArray();
+
+    for (const doc of rerouteDocs) {
+      const reroutes: any[] = (doc as any).reroutes || [];
+      for (const r of reroutes) {
+        const reroutedBy = typeof r.reroutedBy === 'string' ? r.reroutedBy : r.reroutedBy?.toString();
+        const reroutedAt = r.reroutedAt ? new Date(r.reroutedAt) : null;
+        if (reroutedBy === userId && reroutedAt && reroutedAt >= startDate && reroutedAt <= endDate) {
+          reroutedCount++;
+          // Calculate duration from first reroute entry time to this reroute time
+          const firstEntry = reroutes.find((entry: any) => {
+            const entryReroutedBy = typeof entry.reroutedBy === 'string' ? entry.reroutedBy : entry.reroutedBy?.toString();
+            return entryReroutedBy === userId && entry.reroutedAt;
+          });
+          if (firstEntry && firstEntry.reroutedAt) {
+            const startAt = new Date(firstEntry.reroutedAt);
+            reroutingIntervals.push(...getActiveOverlapIntervals(startAt, reroutedAt));
+          }
         }
       }
     }
+
+    // 7. Expert Rerouting: reroute entries where the expert (reroutedTo) received a rerouted question in date range
+    let expertReroutedCount = 0;
+    const expertReroutingIntervals: TimeInterval[] = [];
+
+    const expertRerouteDocs = await this.ReRouteCollection.find({
+      reroutes: {
+        $elemMatch: {
+          reroutedTo: userObjectId,
+          reroutedAt: { $gte: startDate, $lte: endDate },
+        },
+      },
+    }).toArray();
+
+    for (const doc of expertRerouteDocs) {
+      const reroutes: any[] = (doc as any).reroutes || [];
+      for (const r of reroutes) {
+        const reroutedTo = typeof r.reroutedTo === 'string' ? r.reroutedTo : r.reroutedTo?.toString();
+        const reroutedAt = r.reroutedAt ? new Date(r.reroutedAt) : null;
+        if (reroutedTo === userId && reroutedAt && reroutedAt >= startDate && reroutedAt <= endDate) {
+          expertReroutedCount++;
+          // Duration: from reroutedAt (when expert was assigned) to updatedAt (last status change / completion)
+          const updatedAt = (doc as any).updatedAt ? new Date((doc as any).updatedAt) : null;
+          if (updatedAt) {
+            expertReroutingIntervals.push(...getActiveOverlapIntervals(reroutedAt, updatedAt));
+          }
+        }
+      }
+    }
+
+    // 8. Hold Questions: questions placed on hold by this user in date range
+    let heldCount = 0;
+    const holdIntervals: TimeInterval[] = [];
+
+    try {
+      const auditCollection =
+        await this.db.getCollection<any>('auditTrails');
+      const holdAudits = await auditCollection
+        .find({
+          action: 'QUESTION_HOLD',
+          $or: [
+            { 'actor.id': userObjectId },
+            { 'actor.id': userId },
+          ],
+          createdAt: { $gte: startDate, $lte: endDate },
+        })
+        .toArray();
+
+      if (holdAudits.length > 0) {
+        const qIdSet = new Set<string>();
+        for (const a of holdAudits) {
+          const qId = a.context?.questionId?.toString();
+          if (qId && ObjectId.isValid(qId)) {
+            qIdSet.add(qId);
+          }
+        }
+
+        const heldQuestions =
+          qIdSet.size > 0
+            ? await this.QuestionCollection.find({
+                _id: { $in: Array.from(qIdSet).map((id) => new ObjectId(id)) },
+              }).toArray()
+            : [];
+
+        const heldQMap = new Map<string, IQuestion>();
+        for (const q of heldQuestions) {
+          if (q._id) heldQMap.set(q._id.toString(), q);
+        }
+
+        for (const a of holdAudits) {
+          heldCount++;
+          const qIdStr = a.context?.questionId?.toString();
+          const q = qIdStr ? heldQMap.get(qIdStr) : undefined;
+          if (q && a.createdAt) {
+            const assignedAt =
+              q.gateKeeperId?.toString() === userId && q.gateKeeperAssignedAt
+                ? q.gateKeeperAssignedAt
+                : q.moderatorId?.toString() === userId && q.moderatorAssignedAt
+                  ? q.moderatorAssignedAt
+                  : q.auditorId?.toString() === userId && q.auditorAssignedAt
+                    ? q.auditorAssignedAt
+                    : (q.moderatorAssignedAt || q.gateKeeperAssignedAt || q.auditorAssignedAt);
+
+            if (assignedAt) {
+              holdIntervals.push(...getActiveOverlapIntervals(new Date(assignedAt), new Date(a.createdAt)));
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('[getUserActivityMetrics] Failed to fetch hold metrics:', err?.message);
+    }
+
+    // Clean and merge hold intervals first
+    const cleanHoldIntervals = mergeIntervals(holdIntervals);
+    const totalHoldingMs = sumIntervals(cleanHoldIntervals);
+
+    // Deduct overlapping hold intervals from primary review / screening / audit intervals
+    // so time spent reviewing a question to place it on hold is not double-counted as completed work
+    const totalAuthoringMs = sumIntervals(subtractIntervals(authoringIntervals, cleanHoldIntervals));
+    const totalReviewingMs = sumIntervals(subtractIntervals(reviewingIntervals, cleanHoldIntervals));
+    const totalModeratingMs = sumIntervals(subtractIntervals(moderatingIntervals, cleanHoldIntervals));
+    const totalAuditingMs = sumIntervals(subtractIntervals(auditingIntervals, cleanHoldIntervals));
+    const totalGatekeepingMs = sumIntervals(subtractIntervals(gatekeepingIntervals, cleanHoldIntervals));
+    const totalReroutingMs = sumIntervals(subtractIntervals(reroutingIntervals, cleanHoldIntervals));
+    const totalExpertReroutingMs = sumIntervals(subtractIntervals(expertReroutingIntervals, cleanHoldIntervals));
 
     return {
       authoredCount,
@@ -10561,6 +10883,12 @@ export class QuestionRepository implements IQuestionRepository {
       gatekeepedCount,
       totalGatekeepingMs,
       gdbPushedCount,
+      reroutedCount,
+      totalReroutingMs,
+      expertReroutedCount,
+      totalExpertReroutingMs,
+      heldCount,
+      totalHoldingMs,
     };
   }
 }
