@@ -5,28 +5,78 @@ enters the existing review workflow. Never mutates the draft itself.
 
 import logging
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from assistant import operations, structural_validator
-from assistant.models import PolishDraftRequest, PolishDraftResponse, StructuralValidationStatus
+from assistant.models import (
+    PolishDraftRequest,
+    PolishDraftResponse,
+    StructuralValidationResult,
+    StructuralValidationStatus,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
 log = logging.getLogger("writing_assistant")
 
 app = FastAPI(title="Writing Assistant")
 
+# Wide open on purpose - this service has no auth/session state to leak,
+# this endpoint has none either, and /demo below calls it from whatever
+# origin the page itself is served from (same-origin on Render, so CORS
+# doesn't even apply there) - this just also lets someone point a
+# separate tool at this deployment from another origin if they want to.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+_DEMO_HTML_PATH = Path(__file__).parent / "static" / "demo.html"
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def demo_page() -> str:
+    """A small, self-contained test console for /polish-draft - every
+    request field/option, and the full response (structural validation
+    table, polishing status/reason, the guardrail's checked-tokens and
+    details, and the suggested rewrite's before/after changes) rendered
+    for a non-technical reviewer. Calls this same server's own API via
+    relative paths, so it works unmodified on localhost, in Docker
+    Compose, or once deployed (e.g. to Render) - nothing to configure."""
+    return _DEMO_HTML_PATH.read_text(encoding="utf-8")
+
 
 @app.post("/polish-draft", response_model=PolishDraftResponse)
 def polish_draft_endpoint(request: PolishDraftRequest) -> PolishDraftResponse:
-    # Structural validation runs first: team requirement is that a polish
-    # suggestion is only offered once every expected step is covered, so an
-    # incomplete draft skips the (slower) rewrite+guardrail call entirely
-    # rather than computing and then discarding it.
-    structural_result = structural_validator.validate_structure_cached(request.question, request.draft)
+    if request.skip_structural_validation:
+        # Caller is already confident the draft's structure is fine and
+        # only wants language polishing - skip the checklist entirely
+        # (0 of its ~30 calls) rather than running it and discarding the
+        # result. structuralValidation stays a required field (never
+        # silently omitted), reporting SKIPPED instead of a real verdict
+        # so a reader can tell "didn't run" apart from every other status.
+        structural_result = StructuralValidationResult(status=StructuralValidationStatus.SKIPPED, steps=[])
+    else:
+        # Structural validation runs first: team requirement is that a
+        # polish suggestion is only offered once every expected step is
+        # covered, so an incomplete draft skips the (slower)
+        # rewrite+guardrail call entirely rather than computing and then
+        # discarding it. skip_steps (steps the caller says don't apply
+        # to this draft) are simply never checked, so they can never
+        # count against completeness either.
+        structural_result = structural_validator.validate_structure_cached(
+            request.question, request.draft, request.skip_steps
+        )
 
-    if structural_result.status == StructuralValidationStatus.COMPLETE:
-        language_result = operations.polish_draft_cached(request.draft)
+    if request.skip_polish:
+        language_result = operations.polish_skipped_at_callers_request()
+    elif request.skip_structural_validation or structural_result.status == StructuralValidationStatus.COMPLETE:
+        language_result = operations.polish_draft_cached(request.draft, request.skip_guardrail)
     else:
         language_result = operations.skipped_due_to_incomplete_structure(structural_result)
 

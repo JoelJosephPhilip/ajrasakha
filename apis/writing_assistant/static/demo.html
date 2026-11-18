@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Writing Assistant - Test Console</title>
+<link rel="preconnect" href="https://fonts.gstatic.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout: two-pane working tool - request form pinned on the left,
+   result stream scrolls on the right; stacks to one column on phone. */
+:root{
+  --bg:#f6f4ee; --surface:#ffffff; --surface-2:#fbfaf6; --border:#dcd6c6;
+  --ink:#1f2a1f; --ink-dim:#5c6a59; --accent:#3c6e47; --accent-ink:#ffffff;
+  --accent-soft:#e3efe2; --warn:#9a6b1f; --warn-soft:#f8eed7;
+  --danger:#a53d3d; --danger-soft:#f7e3e3; --neutral:#6b6b63; --neutral-soft:#ececE4;
+  --mono:'IBM Plex Mono',ui-monospace,monospace; --sans:'IBM Plex Sans',system-ui,sans-serif;
+  padding-left: max(16px, env(safe-area-inset-left,0px));
+  padding-right: max(16px, env(safe-area-inset-right,0px));
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#131712; --surface:#1a1f19; --surface-2:#171c16; --border:#2b332a;
+    --ink:#e9efe5; --ink-dim:#9db098; --accent:#6fcf8c; --accent-ink:#0e1a12;
+    --accent-soft:#1f3023; --warn:#e3b35c; --warn-soft:#332a14;
+    --danger:#e38080; --danger-soft:#3a1d1d; --neutral:#9aa296; --neutral-soft:#242921;
+    color-scheme: dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.45;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--sans);margin:0}
+img{max-width:100%}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+header.top{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+header.top .title{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+header.top h1{font-size:22px;font-weight:700;letter-spacing:-.01em}
+header.top .tag{font-family:var(--mono);font-size:11px;color:var(--ink-dim);letter-spacing:.04em;text-transform:uppercase;background:var(--surface-2);border:1px solid var(--border);padding:3px 8px;border-radius:999px}
+.conn{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-dim);flex-wrap:wrap}
+.conn input{font-family:var(--mono);font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--ink);width:210px;min-width:0}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--neutral);flex:none}
+.dot.ok{background:var(--accent)} .dot.bad{background:var(--danger)}
+.btn{font-family:var(--sans);font-size:13px;font-weight:600;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--ink);padding:7px 12px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.05)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.sm{font-size:12px;padding:5px 9px}
+
+.grid{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:860px){.grid{grid-template-columns:minmax(0,1fr)}}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;min-width:0}
+.panel-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.panel-title h2{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-dim)}
+
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--ink-dim);margin-bottom:5px}
+.field input[type=text], .field textarea{
+  width:100%;font-family:var(--sans);font-size:13.5px;color:var(--ink);
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 10px;resize:vertical;
+}
+.field textarea{min-height:220px;line-height:1.5;font-family:var(--mono);font-size:12.5px}
+.field input[type=text]:focus, .field textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+
+details.opts{border:1px solid var(--border);border-radius:10px;background:var(--surface-2);margin-bottom:14px}
+details.opts summary{cursor:pointer;padding:9px 12px;font-size:12.5px;font-weight:600;color:var(--ink-dim);list-style:none}
+details.opts summary::-webkit-details-marker{display:none}
+details.opts summary::before{content:"▸ ";color:var(--accent)}
+details.opts[open] summary::before{content:"▾ "}
+.opts-body{padding:4px 12px 12px}
+
+.toggle-row{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-top:1px solid var(--border)}
+.toggle-row:first-child{border-top:none}
+.toggle-row input{margin-top:3px;flex:none;accent-color:var(--accent)}
+.toggle-row .tlabel{font-size:13px;font-weight:600}
+.toggle-row .thint{font-size:11.5px;color:var(--ink-dim);margin-top:1px}
+
+.steps-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;margin-top:4px}
+@media (max-width:420px){.steps-grid{grid-template-columns:1fr}}
+.step-chk{display:flex;align-items:flex-start;gap:6px;font-size:12px;padding:3px 0}
+.step-chk input{margin-top:2px;flex:none;accent-color:var(--accent)}
+
+.examples{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+
+.submit-row{display:flex;align-items:center;gap:10px;margin-top:4px}
+.submit-row .btn.primary{flex:1;padding:11px 14px;font-size:14px}
+
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;padding:60px 20px;color:var(--ink-dim);border:1px dashed var(--border);border-radius:12px;background:var(--surface-2)}
+.empty svg{opacity:.5}
+
+.loading{display:flex;align-items:center;gap:10px;padding:40px 20px;color:var(--ink-dim);font-size:13px;justify-content:center}
+.spinner{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.spinner{animation:none}}
+
+.err-box{background:var(--danger-soft);border:1px solid var(--danger);color:var(--danger);border-radius:10px;padding:12px 14px;font-size:13px}
+.err-box strong{display:block;margin-bottom:4px}
+.err-box code{font-family:var(--mono);font-size:11.5px;word-break:break-all}
+
+.results{display:flex;flex-direction:column;gap:16px;min-width:0}
+.meta-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--ink-dim);font-family:var(--mono)}
+.meta-row .chip{background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:3px 9px}
+
+.badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;border-radius:999px;padding:4px 10px;border:1px solid transparent}
+.badge.covered,.badge.complete,.badge.suggested,.badge.passed{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.badge.partial{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+.badge.missing,.badge.incomplete,.badge.rejected,.badge.failed{background:var(--danger-soft);color:var(--danger);border-color:var(--danger)}
+.badge.not_assessed,.badge.skipped,.badge.unavailable{background:var(--neutral-soft);color:var(--neutral);border-color:var(--neutral)}
+
+table.steps{width:100%;border-collapse:collapse;font-size:12.5px}
+table.steps th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-dim);padding:6px 8px;border-bottom:1px solid var(--border)}
+table.steps td{padding:8px;border-bottom:1px solid var(--border);vertical-align:top}
+table.steps tr:last-child td{border-bottom:none}
+table.steps td.step-name{font-weight:600;white-space:nowrap}
+table.steps td.sl{color:var(--ink-dim);width:22px}
+.gap-note{font-size:11.5px;color:var(--ink-dim);margin-top:3px}
+.order-warn{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:8px 10px;font-size:12px;margin-top:8px}
+
+.reason-box{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--ink-dim);margin-bottom:12px}
+
+.diff-card{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:8px}
+.diff-row{padding:8px 10px;font-family:var(--mono);font-size:12px;line-height:1.5;word-break:break-word}
+.diff-row.before{background:var(--danger-soft);color:var(--ink)}
+.diff-row.after{background:var(--accent-soft);color:var(--ink);border-top:1px solid var(--border)}
+.diff-tag{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-right:6px;opacity:.7}
+
+.tokens-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin:10px 0}
+.token-chip{display:flex;justify-content:space-between;gap:6px;font-size:11px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:5px 8px}
+.token-chip .tname{color:var(--ink-dim)}
+.token-chip .tval{font-family:var(--mono);font-weight:600}
+.token-chip .tval.changed{color:var(--danger)}
+.token-chip .tval.unchanged{color:var(--accent)}
+.token-chip .tval.not_run{color:var(--danger)}
+
+.details-list{margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--ink-dim)}
+.details-list li{margin-bottom:4px}
+.disclaimer{font-size:11px;color:var(--ink-dim);font-style:italic;margin-top:10px}
+
+.suggested-text{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:8px}
+
+pre.raw{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;overflow:auto;max-height:420px;white-space:pre-wrap}
+
+footer.note{margin-top:28px;font-size:11.5px;color:var(--ink-dim);text-align:center}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="title">
+      <h1>Writing Assistant</h1>
+      <span class="tag">/polish-draft test console</span>
+    </div>
+    <div class="conn">
+      <span id="connDot" class="dot"></span>
+      <span id="connLabel">not checked</span>
+      <input id="baseUrl" type="text" placeholder="(this server)" spellcheck="false">
+      <button class="btn sm" id="checkBtn" type="button">Check</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- Request panel -->
+    <div class="card">
+      <div class="panel-title"><h2>Request</h2></div>
+
+      <div class="examples">
+        <button class="btn sm" data-example="complete" type="button">Complete draft</button>
+        <button class="btn sm" data-example="partial" type="button">Partial draft</button>
+        <button class="btn sm" data-example="typo" type="button">Needs polish</button>
+      </div>
+
+      <div class="field">
+        <label for="question">Question</label>
+        <input id="question" type="text" value="How to control Blast Disease in paddy?">
+      </div>
+
+      <div class="field">
+        <label for="draft">Draft answer</label>
+        <textarea id="draft" spellcheck="false"></textarea>
+      </div>
+
+      <details class="opts" open>
+        <summary>Checklist steps to skip</summary>
+        <div class="opts-body">
+          <div class="steps-grid" id="skipStepsGrid"></div>
+        </div>
+      </details>
+
+      <details class="opts">
+        <summary>Request options</summary>
+        <div class="opts-body">
+          <div class="toggle-row">
+            <input type="checkbox" id="skipStructural">
+            <div><div class="tlabel">Skip structural validation</div><div class="thint">Go straight to polishing - caller already trusts the draft's structure.</div></div>
+          </div>
+          <div class="toggle-row">
+            <input type="checkbox" id="skipGuardrail">
+            <div><div class="tlabel">Skip technical-content guardrail</div><div class="thint">Return the rewrite as soon as it's generated, with no fact-preservation check.</div></div>
+          </div>
+          <div class="toggle-row">
+            <input type="checkbox" id="skipPolish">
+            <div><div class="tlabel">Skip language polishing</div><div class="thint">Only run the structural checklist - saves the rewrite + guardrail calls entirely.</div></div>
+          </div>
+        </div>
+      </details>
+
+      <div class="submit-row">
+        <button class="btn primary" id="submitBtn" type="button">Run /polish-draft</button>
+      </div>
+    </div>
+
+    <!-- Results panel -->
+    <div id="resultsPane">
+      <div class="empty">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        <div>Run a request to see structural validation, polishing and the guardrail's before/after diff here.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="note">Calls this server's own API directly from the browser - nothing is sent anywhere else.</footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var FIXED_STEPS = [
+    "Introduction",
+    "Is this a major or minor problem",
+    "Confirm the identification first",
+    "Severity - impact if uncontrolled",
+    "Decision point - when to move to chemical control",
+    "Cultural control",
+    "Biological control",
+    "Chemical control (once threshold crossed)",
+    "Safety and PHI",
+    "Conclusion"
+  ];
+
+  var EXAMPLES = {
+    complete: {
+      question: "How to control Blast Disease in paddy?",
+      draft: "Introduction\nRice Blast, caused by the fungus Magnaporthe oryzae (syn. Pyricularia oryzae), is one of the most destructive fungal diseases of paddy in India. It can affect leaves, nodes, necks and panicles at different crop growth stages. Effective management requires an Integrated Disease Management (IDM) approach combining cultural, biological and need-based chemical measures.\n\nIs This a Major or Minor Problem for Paddy\nRice Blast is a major and economically important disease of paddy. Severe infection can cause considerable yield losses, particularly when neck blast develops during heading and flowering.\n\nConfirm the Identification First\nLeaf blast appears as spindle-shaped or diamond-shaped lesions with grey or whitish centres and brown margins. Neck blast causes brown to black discoloration around the panicle neck.\n\nSeverity - What Happens if Uncontrolled\nIf left unmanaged, the disease can spread rapidly across the field, reducing photosynthetic area and interfering with nutrient movement to developing grains.\n\nDecision Point - When to Move to Chemical Control\nMonitor the crop regularly, especially during cloudy weather and high humidity. Protection is particularly important around booting and heading because neck blast can cause severe yield losses.\n\nCultural Control\nUse healthy, certified disease-free seeds and resistant or tolerant varieties. Maintain optimum spacing and avoid excessive nitrogen application.\n\nBiological Control\nSeed treatment with locally recommended Trichoderma-based formulations may help suppress seed- and soil-associated inoculum.\n\nChemical Control (Once Severity Crosses the Threshold)\nUse fungicides specifically registered and recommended for Rice Blast in paddy, following the current CIB&RC-registered label for dose, timing and application method.\n\nSafety and PHI\nWear gloves, a mask and protective clothing during fungicide application. Follow the product label's pre-harvest interval (PHI).\n\nConclusion\nEarly identification and timely management, combined with resistant varieties and a registered fungicide when needed, are essential to control Rice Blast in paddy."
+    },
+    partial: {
+      question: "How to control Blast Disease in paddy?",
+      draft: "Introduction\nRice Blast, caused by the fungus Magnaporthe oryzae, is one of the most destructive fungal diseases of paddy in India.\n\nConclusion\nEarly identification and timely management are essential to control Rice Blast in paddy."
+    },
+    typo: {
+      question: "How to control Blast Disease in paddy?",
+      draft: "Introduction\nRice Blast, caused by the fungus Magnaporthe oryzae, is one of the most destructive fungal diseases of paddy in India.\n\nIs This a Major or Minor Problem for Paddy\nRice Blast is a major and economically important disease of paddy. Severe infection can causes considerable yield losses.\n\nConfirm the Identification First\nLeaf blast appear as spindle-shaped or diamond-shaped lesions with grey or whitish centres and brown margins.\n\nSeverity - What Happens if Uncontrolled\nIf left unmanaged, the disease can spreads rapidly across the field.\n\nDecision Point - When to Move to Chemical Control\nMonitor the crop regularly. If leaf blast symptoms appear and continue spreading, consider appropriate control measures.\n\nCultural Control\nUse healthy, certified disease-free seeds and recommended resistant or tolerant rice varieties.\n\nBiological Control\nSeed treatment with locally recommended Trichoderma-based formulations may help suppress seed-associated inoculum.\n\nChemical Control (Once Severity Crosses the Threshold)\nUse fungicides specifically registered and recommended for Rice Blast in paddy at a dose of 2ml per litre of water.\n\nSafety and PHI\nWear gloves, a mask and protective clothing during fungicide application. Follow a pre-harvest interval (PHI) of 21 days.\n\nConclusion\nEarly identification and timely management is essential to control Rice Blast in paddy."
+    }
+  };
+
+  var $ = function(id){ return document.getElementById(id); };
+  var el = function(tag, cls, html){ var e = document.createElement(tag); if(cls) e.className = cls; if(html !== undefined) e.innerHTML = html; return e; };
+  var esc = function(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); };
+
+  function loadBaseUrl(){
+    try {
+      var saved = localStorage.getItem("wa_demo_base_url");
+      if (saved) $("baseUrl").value = saved;
+    } catch(e) {}
+  }
+  function saveBaseUrl(){
+    try { localStorage.setItem("wa_demo_base_url", $("baseUrl").value.trim()); } catch(e) {}
+  }
+  // Empty means "this server" (relative paths) - works unmodified on
+  // localhost, in Docker Compose, or on a Render URL, since it never
+  // hardcodes a host.
+  function getBase(){
+    return $("baseUrl").value.trim().replace(/\/$/, "");
+  }
+
+  // Build the skip-steps checkbox grid once.
+  (function buildStepsGrid(){
+    var grid = $("skipStepsGrid");
+    FIXED_STEPS.forEach(function(name, i){
+      var row = el("label", "step-chk");
+      var input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = name;
+      input.id = "skipstep-" + i;
+      row.appendChild(input);
+      row.appendChild(document.createTextNode(name));
+      grid.appendChild(row);
+    });
+  })();
+
+  function getSkippedSteps(){
+    var out = [];
+    FIXED_STEPS.forEach(function(name, i){
+      if ($("skipstep-" + i).checked) out.push(name);
+    });
+    return out;
+  }
+
+  function setExample(key){
+    var ex = EXAMPLES[key];
+    if (!ex) return;
+    $("question").value = ex.question;
+    $("draft").value = ex.draft;
+  }
+  setExample("complete");
+
+  document.querySelectorAll("[data-example]").forEach(function(btn){
+    btn.addEventListener("click", function(){ setExample(btn.getAttribute("data-example")); });
+  });
+
+  async function checkConnection(){
+    var dot = $("connDot"), label = $("connLabel");
+    dot.className = "dot";
+    label.textContent = "checking...";
+    try {
+      var res = await fetch(getBase() + "/health", { method: "GET" });
+      if (res.ok) {
+        dot.className = "dot ok";
+        label.textContent = "connected";
+      } else {
+        dot.className = "dot bad";
+        label.textContent = "HTTP " + res.status;
+      }
+    } catch(e) {
+      dot.className = "dot bad";
+      label.textContent = "unreachable";
+    }
+  }
+  $("checkBtn").addEventListener("click", function(){ saveBaseUrl(); checkConnection(); });
+
+  function statusBadge(value){
+    var v = String(value || "").toLowerCase();
+    return '<span class="badge ' + esc(v) + '">' + esc(value) + '</span>';
+  }
+
+  function renderStructural(sv){
+    var box = el("div", "card");
+    box.appendChild(el("div", "panel-title", '<h2>Structural validation</h2>' + statusBadge(sv.status)));
+    if (sv.status === "skipped" || !sv.steps || !sv.steps.length) {
+      box.appendChild(el("div", "reason-box", "Not run for this request."));
+      return box;
+    }
+    var table = el("table", "steps");
+    var thead = el("thead", "", "<tr><th>#</th><th>Step</th><th>Coverage</th><th>Gap detail</th></tr>");
+    table.appendChild(thead);
+    var tbody = el("tbody");
+    sv.steps.forEach(function(s){
+      var tr = el("tr");
+      tr.appendChild(el("td", "sl", esc(s.slNo)));
+      tr.appendChild(el("td", "step-name", esc(s.step)));
+      tr.appendChild(el("td", "", statusBadge(s.coverage)));
+      var gapCell = el("td");
+      if (s.coverage !== "covered") {
+        var note = el("div", "gap-note", esc(s.suggestion1 || s.example || ""));
+        gapCell.appendChild(note);
+      } else {
+        gapCell.innerHTML = '<span style="color:var(--ink-dim)">-</span>';
+      }
+      tr.appendChild(gapCell);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    box.appendChild(table);
+    if (sv.orderWarnings && sv.orderWarnings.length) {
+      sv.orderWarnings.forEach(function(w){
+        box.appendChild(el("div", "order-warn", "⚠ " + esc(w)));
+      });
+    }
+    return box;
+  }
+
+  function renderPolishing(lp){
+    var box = el("div", "card");
+    box.appendChild(el("div", "panel-title", '<h2>Language polishing</h2>' + statusBadge(lp.status)));
+    if (lp.reason) {
+      box.appendChild(el("div", "reason-box", esc(lp.reason)));
+    }
+    if (lp.status === "suggested" && lp.changes) {
+      if (lp.changes.length === 0) {
+        box.appendChild(el("div", "reason-box", "Rewrite generated - no change was needed, text returned as-is."));
+      } else {
+        box.appendChild(el("h3", "", '<span style="font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-dim)">Changes made (' + lp.changes.length + ')</span>'));
+        lp.changes.forEach(function(c){
+          var card = el("div", "diff-card");
+          card.appendChild(el("div", "diff-row before", '<span class="diff-tag">before</span>' + esc(c.before)));
+          card.appendChild(el("div", "diff-row after", '<span class="diff-tag">after</span>' + esc(c.after)));
+          box.appendChild(card);
+        });
+      }
+      var details = el("details", "opts");
+      details.appendChild(el("summary", "", "Full suggested text"));
+      var body = el("div", "opts-body");
+      body.appendChild(el("div", "suggested-text", esc(lp.suggestedText || "")));
+      details.appendChild(body);
+      box.appendChild(details);
+    }
+    if (lp.guardrail) {
+      var g = lp.guardrail;
+      var gbox = el("div", "", "");
+      gbox.appendChild(el("div", "panel-title", '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-dim)">Technical-content guardrail</h3>' + statusBadge(g.status)));
+      var grid = el("div", "tokens-grid");
+      var labels = {
+        numbersAndUnits: "Numbers & units", chemicalNames: "Chemical names", certaintyLanguage: "Certainty",
+        negation: "Negation", cropNames: "Crop names", treatmentIdentity: "Treatment identity",
+        timing: "Timing", conditions: "Conditions", sentenceAlignment: "Sentence alignment"
+      };
+      Object.keys(labels).forEach(function(k){
+        var val = g.checkedTokens ? g.checkedTokens[k] : null;
+        if (val == null) return;
+        var chip = el("div", "token-chip");
+        chip.appendChild(el("span", "tname", labels[k]));
+        chip.appendChild(el("span", "tval " + val, val));
+        grid.appendChild(chip);
+      });
+      gbox.appendChild(grid);
+      if (g.details && g.details.length) {
+        var ul = el("ul", "details-list");
+        g.details.forEach(function(d){ ul.appendChild(el("li", "", esc(d))); });
+        gbox.appendChild(ul);
+      }
+      if (g.disclaimer) gbox.appendChild(el("div", "disclaimer", esc(g.disclaimer)));
+      box.appendChild(gbox);
+    }
+    return box;
+  }
+
+  function renderMeta(data, elapsedMs){
+    var row = el("div", "meta-row");
+    row.appendChild(el("span", "chip", "request " + esc((data.requestId || "").slice(0, 8))));
+    row.appendChild(el("span", "chip", elapsedMs + " ms"));
+    if (data.warnings && data.warnings.length) row.appendChild(el("span", "chip", data.warnings.length + " warning(s)"));
+    if (data.errors && data.errors.length) row.appendChild(el("span", "chip", data.errors.length + " error(s)"));
+    return row;
+  }
+
+  function renderRaw(data){
+    var details = el("details", "opts");
+    details.appendChild(el("summary", "", "Raw response JSON"));
+    var body = el("div", "opts-body");
+    body.appendChild(el("pre", "raw", esc(JSON.stringify(data, null, 2))));
+    details.appendChild(body);
+    return details;
+  }
+
+  function renderError(message, hint){
+    var box = el("div", "err-box");
+    box.innerHTML = "<strong>Request failed</strong>" + esc(message) +
+      (hint ? '<div style="margin-top:6px"><code>' + esc(hint) + "</code></div>" : "");
+    return box;
+  }
+
+  async function runRequest(){
+    var base = getBase();
+    saveBaseUrl();
+    var pane = $("resultsPane");
+    pane.innerHTML = "";
+    pane.appendChild(el("div", "loading", '<span class="spinner"></span> Calling ' + esc(base || "this server") + '/polish-draft ...'));
+
+    var payload = {
+      question: $("question").value,
+      draft: $("draft").value,
+      skipSteps: getSkippedSteps(),
+      skipStructuralValidation: $("skipStructural").checked,
+      skipGuardrail: $("skipGuardrail").checked,
+      skipPolish: $("skipPolish").checked
+    };
+
+    var btn = $("submitBtn");
+    btn.disabled = true;
+    btn.textContent = "Running...";
+    var t0 = performance.now();
+    try {
+      var res = await fetch(base + "/polish-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      var elapsed = Math.round(performance.now() - t0);
+      if (!res.ok) {
+        var text = await res.text();
+        pane.innerHTML = "";
+        pane.appendChild(renderError("HTTP " + res.status, text.slice(0, 400)));
+        return;
+      }
+      var data = await res.json();
+      pane.innerHTML = "";
+      var results = el("div", "results");
+      results.appendChild(renderMeta(data, elapsed));
+      results.appendChild(renderStructural(data.structuralValidation || {}));
+      results.appendChild(renderPolishing(data.languagePolishing || {}));
+      results.appendChild(renderRaw(data));
+      pane.appendChild(results);
+    } catch(e) {
+      pane.innerHTML = "";
+      pane.appendChild(renderError(
+        "Could not reach the server.",
+        "Check the endpoint field and that the server is running."
+      ));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Run /polish-draft";
+    }
+  }
+  $("submitBtn").addEventListener("click", runRequest);
+
+  loadBaseUrl();
+  checkConnection();
+})();
+</script>
+</body>
+</html>
